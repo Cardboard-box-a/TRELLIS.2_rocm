@@ -1,8 +1,12 @@
+from email.mime import image
+
 import gradio as gr
 
 import os
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["HSA_XNACK"] = "1"
+os.environ["PYTORCH_HIP_ALLOC_CONF"] = "garbage_collection_threshold:0.6,max_split_size_mb:128"
 from datetime import datetime
 import shutil
 import cv2
@@ -399,7 +403,10 @@ def image_to_3d(
     )
     mesh = outputs[0]
     mesh.simplify(16777216) # nvdiffrast limit
-    images = render_utils.render_snapshot(mesh, resolution=1024, r=2, fov=36, nviews=STEPS, envmap=envmap)
+    print("Skipping nvdiffrast preview render for ROCm compatibility...")
+    dummy_img = np.array(image.resize((512, 512)).convert("RGB"))
+    images = {mode['render_key']: [dummy_img] * STEPS for mode in MODES}    
+    #images = render_utils.render_snapshot(mesh, resolution=1024, r=2, fov=36, nviews=STEPS, envmap=envmap)
     state = pack_state(latents)
     torch.cuda.empty_cache()
     

@@ -323,7 +323,7 @@ class Trellis2TexturingPipeline(Pipeline):
         pos = dr.interpolate(vertices_torch.unsqueeze(0), rast, faces_torch)[0][0]
         
         attrs = torch.zeros(texture_size, texture_size, pbr_voxel.shape[1], device=self.device)
-        attrs[mask] = flex_gemm.ops.grid_sample.grid_sample_3d(
+        if mask.any(): attrs[mask] = flex_gemm.ops.grid_sample.grid_sample_3d(
             pbr_voxel.feats,
             pbr_voxel.coords,
             shape=torch.Size([*pbr_voxel.shape, *pbr_voxel.spatial_shape]),

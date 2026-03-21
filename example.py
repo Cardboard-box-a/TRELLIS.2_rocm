@@ -1,6 +1,8 @@
 import os
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  # Can save GPU memory
+os.environ["PYTORCH_HIP_ALLOC_CONF"] = "garbage_collection_threshold:0.6,max_split_size_mb:128"
+os.environ["HSA_XNACK"] = "1"
+
 import cv2
 import imageio
 from PIL import Image
@@ -25,9 +27,9 @@ image = Image.open("assets/example_image/T.png")
 mesh = pipeline.run(image)[0]
 mesh.simplify(16777216) # nvdiffrast limit
 
-# 4. Render Video
-video = render_utils.make_pbr_vis_frames(render_utils.render_video(mesh, envmap=envmap))
-imageio.mimsave("sample.mp4", video, fps=15)
+# 4. Render Video - Disabled for ROCm systems.
+#video = render_utils.make_pbr_vis_frames(render_utils.render_video(mesh, envmap=envmap))
+#imageio.mimsave("sample.mp4", video, fps=15)
 
 # 5. Export to GLB
 glb = o_voxel.postprocess.to_glb(

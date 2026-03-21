@@ -15,11 +15,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "o_voxel"
-version = "0.0.1"
-description = "All about voxel."
+version = "0.0.1+rocm"
+description = "All about voxel (ROCm)"
 requires-python = ">=3.8"
 authors = [
-    { name = "Jianfeng Xiang", email = "belljig@outlook.com" }
+    { name = "Jianfeng Xiang", email = "belljig@outlook.com" },
+    { name = "Michael Lamothe", email = "michael.lamothe@gmail.com" }
 ]
 dependencies = [
     "torch",
@@ -29,6 +30,6 @@ dependencies = [
     "tqdm",
     "zstandard",
     "easydict",
-    "cumesh @ git+https://github.com/JeffreyXiang/CuMesh.git",
-    "flex_gemm @ git+https://github.com/JeffreyXiang/FlexGEMM.git",
+    "cumesh",
+    "flex_gemm"
 ]
