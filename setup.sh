@@ -77,7 +77,7 @@ if [ "$NEW_ENV" = true ] ; then
 fi
 
 if [ "$BASIC" = true ] ; then
-    pip install imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh transformers gradio==6.0.1 tensorboard pandas lpips zstandard
+    pip install imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh transformers gradio==6.0.1 tensorboard pandas lpips zstandard pyfqmr
     pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
     sudo apt install -y libjpeg-dev
     pip install pillow-simd
@@ -93,7 +93,7 @@ if [ "$FLASHATTN" = true ] ; then
         git clone --recursive https://github.com/ROCm/flash-attention.git /tmp/extensions/flash-attention
         cd /tmp/extensions/flash-attention
         git checkout tags/v2.7.3-cktile
-        GPU_ARCHS=gfx942 python setup.py install #MI300 series
+        GPU_ARCHS=gfx1201 python setup.py install
         cd $WORKDIR
     else
         echo "[FLASHATTN] Unsupported platform: $PLATFORM"
@@ -105,8 +105,9 @@ if [ "$NVDIFFRAST" = true ] ; then
         mkdir -p /tmp/extensions
         git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast
         pip install /tmp/extensions/nvdiffrast --no-build-isolation
-    else
-        echo "[NVDIFFRAST] Unsupported platform: $PLATFORM"
+    elif [ "$PLATFORM" = "hip" ] ; then
+        git submodule update --init extensions/nvdiffrast-hip
+        pip install ./extensions/nvdiffrast-hip --no-build-isolation
     fi
 fi
 
@@ -121,19 +122,16 @@ if [ "$NVDIFFREC" = true ] ; then
 fi
 
 if [ "$CUMESH" = true ] ; then
-    mkdir -p /tmp/extensions
-    git clone https://github.com/JeffreyXiang/CuMesh.git /tmp/extensions/CuMesh --recursive
-    pip install /tmp/extensions/CuMesh --no-build-isolation
+    git submodule update --init --recursive extensions/CuMesh
+    pip install ./extensions/CuMesh --no-build-isolation
 fi
 
 if [ "$FLEXGEMM" = true ] ; then
-    mkdir -p /tmp/extensions
-    git clone https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM --recursive
-    pip install /tmp/extensions/FlexGEMM --no-build-isolation
+    git submodule update --init extensions/FlexGEMM
+    pip install ./extensions/FlexGEMM --no-build-isolation
 fi
 
 if [ "$OVOXEL" = true ] ; then
-    mkdir -p /tmp/extensions
-    cp -r o-voxel /tmp/extensions/o-voxel
-    pip install /tmp/extensions/o-voxel --no-build-isolation
+    git submodule update --init --recursive extensions/o-voxel
+    pip install ./extensions/o-voxel --no-build-isolation
 fi
