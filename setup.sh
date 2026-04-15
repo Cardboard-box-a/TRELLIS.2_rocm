@@ -1,10 +1,9 @@
 # Read Arguments
-TEMP=`getopt -o h --long help,new-env,basic,flash-attn,cumesh,o-voxel,flexgemm,nvdiffrast,nvdiffrec -n 'setup.sh' -- "$@"`
+TEMP=`getopt -o h --long help,basic,flash-attn,cumesh,o-voxel,flexgemm,nvdiffrast,nvdiffrec -n 'setup.sh' -- "$@"`
 
 eval set -- "$TEMP"
 
 HELP=false
-NEW_ENV=false
 BASIC=false
 FLASHATTN=false
 CUMESH=false
@@ -22,7 +21,6 @@ fi
 while true ; do
     case "$1" in
         -h|--help) HELP=true ; shift ;;
-        --new-env) NEW_ENV=true ; shift ;;
         --basic) BASIC=true ; shift ;;
         --flash-attn) FLASHATTN=true ; shift ;;
         --cumesh) CUMESH=true ; shift ;;
@@ -44,14 +42,19 @@ if [ "$HELP" = true ] ; then
     echo "Usage: setup.sh [OPTIONS]"
     echo "Options:"
     echo "  -h, --help              Display this help message"
-    echo "  --new-env               Create a new conda environment"
     echo "  --basic                 Install basic dependencies"
     echo "  --flash-attn            Install flash-attention"
     echo "  --cumesh                Install cumesh"
     echo "  --o-voxel               Install o-voxel"
     echo "  --flexgemm              Install flexgemm"
-    echo "  --nvdiffrast            Install nvdiffrast"
-    echo "  --nvdiffrec             Install nvdiffrec"
+    echo "  --nvdiffrast            Install nvdiffrast (CUDA) / nvdiffrast-hip (ROCm)"
+    echo "  --nvdiffrec             Install nvdiffrec (CUDA only)"
+    echo ""
+    echo "  Activate your Python environment before running this script."
+    echo "  For ROCm, ensure ROCm PyTorch is installed first:"
+    echo "    pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/rocm6.2.4"
+    echo "  For CUDA:"
+    echo "    pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124"
     return
 fi
 
@@ -66,18 +69,9 @@ else
     exit 1
 fi
 
-if [ "$NEW_ENV" = true ] ; then
-    conda create -n trellis2 python=3.10
-    conda activate trellis2
-    if [ "$PLATFORM" = "cuda" ] ; then
-        pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
-    elif [ "$PLATFORM" = "hip" ] ; then
-        pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/rocm6.2.4
-    fi
-fi
 
 if [ "$BASIC" = true ] ; then
-    pip install imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh transformers gradio==6.0.1 tensorboard pandas lpips zstandard pyfqmr
+    pip install imageio imageio-ffmpeg tqdm easydict opencv-python-headless ninja trimesh "transformers==4.56.0" gradio==6.0.1 tensorboard pandas lpips zstandard pyfqmr matplotlib
     pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
     sudo apt install -y libjpeg-dev
     pip install pillow-simd
@@ -113,13 +107,9 @@ if [ "$NVDIFFRAST" = true ] ; then
 fi
 
 if [ "$NVDIFFREC" = true ] ; then
-    if [ "$PLATFORM" = "cuda" ] ; then
-        mkdir -p /tmp/extensions
-        git clone -b renderutils https://github.com/Cardboard-box-a/nvdiffrec.git /tmp/extensions/nvdiffrec
-        pip install /tmp/extensions/nvdiffrec --no-build-isolation
-    else
-        echo "[NVDIFFREC] Unsupported platform: $PLATFORM"
-    fi
+    mkdir -p /tmp/extensions
+    git clone -b renderutils https://github.com/Cardboard-box-a/nvdiffrec.git /tmp/extensions/nvdiffrec
+    pip install /tmp/extensions/nvdiffrec --no-build-isolation
 fi
 
 if [ "$CUMESH" = true ] ; then

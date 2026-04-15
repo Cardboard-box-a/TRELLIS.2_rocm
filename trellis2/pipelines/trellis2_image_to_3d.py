@@ -317,7 +317,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             verbose=True,
             tqdm_desc="Sampling shape SLat",
         ).samples
-        print(f"DEBUG SLAT: coords={slat.coords.shape}, spatial_shape={slat.spatial_shape}, "
+        get_logger().debug(f"DEBUG SLAT: coords={slat.coords.shape}, spatial_shape={slat.spatial_shape}, "
               f"coords_max={slat.coords[:,1:].max(dim=0).values}, dtype={slat.feats.dtype}")
         if self.low_vram:
             flow_model_lr.cpu()
@@ -325,7 +325,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         mean = torch.tensor(self.shape_slat_normalization['mean'])[None].to(slat.device)
         slat = slat * std + mean
 
-        print(f"DEBUG SLAT[after *std + mean]: coords={slat.coords.shape}, spatial_shape={slat.spatial_shape}, "
+        get_logger().debug(f"DEBUG SLAT[after *std + mean]: coords={slat.coords.shape}, spatial_shape={slat.spatial_shape}, "
               f"coords_max={slat.coords[:,1:].max(dim=0).values}, dtype={slat.feats.dtype}")
         
         # Upsample
@@ -333,7 +333,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             self.models['shape_slat_decoder'].to(self.device)
             self.models['shape_slat_decoder'].low_vram = True
         hr_coords = self.models['shape_slat_decoder'].upsample(slat, upsample_times=4)
-        print(f"DEBUG CASCADE: hr_coords shape={hr_coords.shape}, max={hr_coords[:,1:].max(dim=0).values}, unique_x={hr_coords[:,1].unique().shape[0]}, unique_y={hr_coords[:,2].unique().shape[0]}, unique_z={hr_coords[:,3].unique().shape[0]}")
+        get_logger().debug(f"DEBUG CASCADE: hr_coords shape={hr_coords.shape}, max={hr_coords[:,1:].max(dim=0).values}, unique_x={hr_coords[:,1].unique().shape[0]}, unique_y={hr_coords[:,2].unique().shape[0]}, unique_z={hr_coords[:,3].unique().shape[0]}")
         
         # Visualize high-resolution coordinates if requested
         if visualize_hr_coords:
@@ -403,7 +403,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
             (c[0]+dx, c[1]+dy, c[2]+dz) in coord_set 
             for dx,dy,dz in [(1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)]
         )) / len(coord_set)
-        print(f"DEBUG TOPOLOGY: coords={len(coord_set)}, neighbor_coverage={has_neighbor:.3f}")
+        get_logger().debug(f"DEBUG TOPOLOGY: coords={len(coord_set)}, neighbor_coverage={has_neighbor:.3f}")
 
         if self.low_vram:
             self.models['shape_slat_decoder'].cpu()
@@ -415,7 +415,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
                 ((hr_coords[:, 1:] + 0.5) / lr_resolution * (hr_resolution // 16)).int(),
             ], dim=1)
             coords = quant_coords.unique(dim=0)
-            print(f"DEBUG COORDS: num_tokens={coords.shape[0]}, max={coords[:,1:].max(dim=0).values}")
+            get_logger().debug(f"DEBUG COORDS: num_tokens={coords.shape[0]}, max={coords[:,1:].max(dim=0).values}")
             num_tokens = coords.shape[0]
             if num_tokens < max_num_tokens or hr_resolution == 1024:
                 if hr_resolution != resolution:
@@ -508,7 +508,7 @@ class Trellis2ImageTo3DPipeline(Pipeline):
         std = torch.tensor(self.shape_slat_normalization['std'])[None].to(slat.device)
         mean = torch.tensor(self.shape_slat_normalization['mean'])[None].to(slat.device)
         slat = slat * std + mean
-        print(f"CASCADE final slat: nan={torch.isnan(slat.feats).any().item()} inf={torch.isinf(slat.feats).any().item()} max={slat.feats.abs().max().item():.4f} dtype={slat.feats.dtype}")
+        get_logger().debug(f"CASCADE final slat: nan={torch.isnan(slat.feats).any().item()} inf={torch.isinf(slat.feats).any().item()} max={slat.feats.abs().max().item():.4f} dtype={slat.feats.dtype}")
         
         # Visualize final SLat features if requested
         if visualize_hr_coords:

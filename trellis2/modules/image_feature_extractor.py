@@ -79,16 +79,20 @@ class DinoV3FeatureExtractor:
         self.model.cpu()
 
     def extract_features(self, image: torch.Tensor) -> torch.Tensor:
+        # transformers 5.x: DINOv3ViTModel is a backbone, use its forward() directly
+        if hasattr(self.model, 'model'):
+            output = self.model(image)
+            hidden_states = output.last_hidden_state
+            return F.layer_norm(hidden_states, hidden_states.shape[-1:])
+        # older transformers: manual layer iteration
         image = image.to(self.model.embeddings.patch_embeddings.weight.dtype)
         hidden_states = self.model.embeddings(image, bool_masked_pos=None)
         position_embeddings = self.model.rope_embeddings(image)
-
         for i, layer_module in enumerate(self.model.layer):
             hidden_states = layer_module(
                 hidden_states,
                 position_embeddings=position_embeddings,
             )
-
         return F.layer_norm(hidden_states, hidden_states.shape[-1:])
         
     @torch.no_grad()

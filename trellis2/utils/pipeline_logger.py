@@ -18,6 +18,7 @@ LOG_PATH = "/tmp/trellis2_pipeline.log"
 
 _logger: Optional[logging.Logger] = None
 _run_start: float = 0.0
+_debug_enabled: bool = False
 
 
 def _make_logger() -> logging.Logger:
@@ -37,7 +38,7 @@ def _make_logger() -> logging.Logger:
     log.addHandler(fh)
 
     ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
+    ch.setLevel(logging.DEBUG if _debug_enabled else logging.INFO)
     ch.setFormatter(fmt)
     log.addHandler(ch)
 
@@ -59,6 +60,17 @@ def get_logger() -> logging.Logger:
     if _logger is None:
         _logger = _make_logger()
     return _logger
+
+
+def set_debug(enabled: bool) -> None:
+    """Enable or disable DEBUG-level output to stdout."""
+    global _debug_enabled, _logger
+    _debug_enabled = enabled
+    # Update any already-created logger's stdout handler
+    if _logger is not None:
+        for handler in _logger.handlers:
+            if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+                handler.setLevel(logging.DEBUG if enabled else logging.INFO)
 
 
 def elapsed() -> str:

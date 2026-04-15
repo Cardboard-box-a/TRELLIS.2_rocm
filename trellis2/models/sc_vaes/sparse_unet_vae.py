@@ -7,6 +7,7 @@ from ...modules.utils import convert_module_to_f16, convert_module_to_bf16, conv
 from ...modules import sparse as sp
 from ...modules.sparse.linear import rocm_safe_linear, ROCM_SAFE_CHUNK
 from ...modules.norm import LayerNorm32
+from ...utils.pipeline_logger import get_logger
 
 
 class SparseResBlock3d(nn.Module):
@@ -492,9 +493,9 @@ class SparseUnetVaeDecoder(nn.Module):
         assert return_subs == False or self.pred_subdiv == True, "Only decoders with pred_subdiv=True can be used with return_subs"
         
         h = self.from_latent(x)
-        print(f"DECODER from_latent: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
+        get_logger().debug(f"DECODER from_latent: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
         h = h.type(self.dtype)
-        print(f"DECODER after dtype cast: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
+        get_logger().debug(f"DECODER after dtype cast: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
         subs_gt = []
         subs = []
         for i, res in enumerate(self.blocks):
@@ -515,17 +516,17 @@ class SparseUnetVaeDecoder(nn.Module):
                     import sys; sys.exit(1)
 
         h = h.type(x.dtype)
-        print(f"DECODER post-blocks cast: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
+        get_logger().debug(f"DECODER post-blocks cast: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
         h = h.replace(F.layer_norm(h.feats, h.feats.shape[-1:]))
-        print(f"DECODER post-layernorm: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f}")
-        print(f"DECODER output_layer input: shape={h.feats.shape} stride={h.feats.stride()} contiguous={h.feats.is_contiguous()}")
-        print(f"DECODER output_layer weight: shape={self.output_layer.weight.shape} dtype={self.output_layer.weight.dtype}")
-        print(f"DECODER pre-output_layer: feats shape={h.feats.shape} contiguous={h.feats.is_contiguous()} weight shape={self.output_layer.weight.shape} weight dtype={self.output_layer.weight.dtype}")
+        get_logger().debug(f"DECODER post-layernorm: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f}")
+        get_logger().debug(f"DECODER output_layer input: shape={h.feats.shape} stride={h.feats.stride()} contiguous={h.feats.is_contiguous()}")
+        get_logger().debug(f"DECODER output_layer weight: shape={self.output_layer.weight.shape} dtype={self.output_layer.weight.dtype}")
+        get_logger().debug(f"DECODER pre-output_layer: feats shape={h.feats.shape} contiguous={h.feats.is_contiguous()} weight shape={self.output_layer.weight.shape} weight dtype={self.output_layer.weight.dtype}")
         # ROCm workaround: ensure contiguous before F.linear
         h = h.replace(h.feats.contiguous())
         h = self.output_layer(h)
-        print(f"DECODER post-output_layer: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
-        print(f"DEBUG OUTPUT_LAYER: dtype={h.feats.dtype} has_nan={torch.isnan(h.feats).any().item()} max_abs={h.feats.abs().max().item() if h.feats.numel() > 0 else 0}")
+        get_logger().debug(f"DECODER post-output_layer: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
+        get_logger().debug(f"DEBUG OUTPUT_LAYER: dtype={h.feats.dtype} has_nan={torch.isnan(h.feats).any().item()} max_abs={h.feats.abs().max().item() if h.feats.numel() > 0 else 0}")
         if self.training and self.pred_subdiv:
             return h, subs_gt, subs
         else:
@@ -539,9 +540,9 @@ class SparseUnetVaeDecoder(nn.Module):
         assert self.pred_subdiv == True, "Only decoders with pred_subdiv=True can be used with upsampling"
         
         h = self.from_latent(x)
-        print(f"UPSAMPLE from_latent: dtype={h.feats.dtype} nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f}")
+        get_logger().debug(f"UPSAMPLE from_latent: dtype={h.feats.dtype} nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f}")
         h = h.type(self.dtype)
-        print(f"UPSAMPLE after type cast to {self.dtype}: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f}")
+        get_logger().debug(f"UPSAMPLE after type cast to {self.dtype}: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f}")
         for i, res in enumerate(self.blocks):
             if i == upsample_times:
                 return h.coords

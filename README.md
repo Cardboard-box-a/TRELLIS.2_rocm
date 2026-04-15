@@ -56,48 +56,42 @@ Data processing is streamlined for instant conversions that are fully **renderin
 ## 🛠️ Installation
 
 ### Prerequisites
-- **System**: The code is currently tested only on **Linux**.
-- **Hardware**: An NVIDIA GPU with at least 24GB of memory is necessary. The code has been verified on NVIDIA A100 and H100 GPUs.  
-- **Software**:   
-  - The [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit-archive) is needed to compile certain packages. Recommended version is 12.4.  
-  - [Conda](https://docs.anaconda.com/miniconda/install/#quick-command-line-install) is recommended for managing dependencies.  
-  - Python version 3.8 or higher is required. 
+- **System**: Linux only.
+- **Hardware**: An NVIDIA GPU (verified on A100/H100, 24GB+ recommended) or AMD GPU (verified on RX 9070 XT 16GB under ROCm).
+- **Software**:
+  - **CUDA**: [CUDA Toolkit](https://developer.nvidia.com/cuda-toolkit-archive) 12.4 recommended.
+  - **ROCm**: [ROCm](https://rocm.docs.amd.com/en/latest/) 7.2 recommended.
+  - Python 3.10 or higher required.
 
 ### Installation Steps
 1. Clone the repo:
     ```sh
-    git clone -b main https://github.com/microsoft/TRELLIS.2.git --recursive
-    cd TRELLIS.2
+    git clone -b rocm https://github.com/Cardboard-box-a/TRELLIS.2_rocm.git --recursive
+    cd TRELLIS.2_rocm
     ```
 
-2. Install the dependencies:
-    
-    **Before running the following command there are somethings to note:**
-    - By adding `--new-env`, a new conda environment named `trellis2` will be created. If you want to use an existing conda environment, please remove this flag.
-    - By default the `trellis2` environment will use pytorch 2.6.0 with CUDA 12.4. If you want to use a different version of CUDA, you can remove the `--new-env` flag and manually install the required dependencies. Refer to [PyTorch](https://pytorch.org/get-started/previous-versions/) for the installation command.
-    - If you have multiple CUDA Toolkit versions installed, `CUDA_HOME` should be set to the correct version before running the command. For example, if you have CUDA Toolkit 12.4 and 13.0 installed, you can run `export CUDA_HOME=/usr/local/cuda-12.4` before running the command.
-    - By default, the code uses the `flash-attn` backend for attention. For GPUs do not support `flash-attn` (e.g., NVIDIA V100), you can install `xformers` manually and set the `ATTN_BACKEND` environment variable to `xformers` before running the code. See the [Minimal Example](#minimal-example) for more details.
-    - The installation may take a while due to the large number of dependencies. Please be patient. If you encounter any issues, you can try to install the dependencies one by one, specifying one flag at a time.
-    - If you encounter any issues during the installation, feel free to open an issue or contact us.
-    
-    Create a new conda environment named `trellis2` and install the dependencies:
+2. Install PyTorch into your environment **before** running `setup.sh`. Use the index URL matching your platform:
+
+    **CUDA:**
     ```sh
-    . ./setup.sh --new-env --basic --flash-attn --nvdiffrast --nvdiffrec --cumesh --o-voxel --flexgemm
+    pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
     ```
-    The detailed usage of `setup.sh` can be found by running `. ./setup.sh --help`.
+    **ROCm:**
     ```sh
-    Usage: setup.sh [OPTIONS]
-    Options:
-        -h, --help              Display this help message
-        --new-env               Create a new conda environment
-        --basic                 Install basic dependencies
-        --flash-attn            Install flash-attention
-        --cumesh                Install cumesh
-        --o-voxel               Install o-voxel
-        --flexgemm              Install flexgemm
-        --nvdiffrast            Install nvdiffrast
-        --nvdiffrec             Install nvdiffrec
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
     ```
+
+3. Install the dependencies:
+
+    ```sh
+    . ./setup.sh --basic --flash-attn --nvdiffrast --nvdiffrec --cumesh --o-voxel --flexgemm
+    ```
+
+    Notes:
+    - `setup.sh` auto-detects CUDA vs ROCm and installs the appropriate variants.
+    - All packages including nvdiffrast and nvdiffrec work on both CUDA and ROCm.
+    - The installation may take a while — flash-attention builds from source on ROCm. Install flags one at a time if you hit issues.
+    - Run `. ./setup.sh --help` for the full list of flags.
 
 ## AMD ROCm Support
 
@@ -105,11 +99,13 @@ This branch has been tested on an **AMD RX 9070 XT 16GB** (gfx1201) under ROCm. 
 
 ### Installation (ROCm)
 
-```sh
-. ./setup.sh --new-env --basic --flash-attn --cumesh --o-voxel --flexgemm --nvdiffrast
-```
+First install ROCm PyTorch, then run setup:
 
-> **Note:** `--nvdiffrast` and `--nvdiffrec` are CUDA-only (PBR texture rendering). On ROCm these are skipped automatically. Core image-to-3D generation works without them.
+```sh
+pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+export FLASH_ATTENTION_TRITON_AMD_ENABLE="TRUE"
+. ./setup.sh --basic --flash-attn --cumesh --o-voxel --flexgemm --nvdiffrast --nvdiffrec
+```
 
 ### Running
 
@@ -352,7 +348,7 @@ Please note that certain dependencies operate under separate license terms:
 
 - [**nvdiffrast**](https://github.com/NVlabs/nvdiffrast): Utilized for rendering generated 3D assets. This package is governed by its own [License](https://github.com/NVlabs/nvdiffrast/blob/main/LICENSE.txt).
 
-- [**nvdiffrec**](https://github.com/NVlabs/nvdiffrec): Implements the split-sum renderer for PBR materials. This package is governed by its own [License](https://github.com/NVlabs/nvdiffrec/blob/main/LICENSE.txt).
+- [**nvdiffrec**](https://github.com/Cardboard-box-a/nvdiffrec): Implements the split-sum renderer for PBR materials. This fork adds ROCm/HIP support. Governed by its own [License](https://github.com/NVlabs/nvdiffrec/blob/main/LICENSE.txt).
 
 ## 📚 Citation
 

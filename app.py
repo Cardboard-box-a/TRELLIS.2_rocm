@@ -25,7 +25,7 @@ from trellis2.pipelines import Trellis2ImageTo3DPipeline
 from trellis2.renderers import EnvMap
 from trellis2.utils import render_utils
 from trellis2.utils.pipeline_logger import (
-    reset_log, get_logger, section, log_mesh, log_tensor, log_uv, elapsed
+    reset_log, get_logger, section, log_mesh, log_tensor, log_uv, elapsed, set_debug
 )
 import o_voxel
 
@@ -674,6 +674,12 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
 
 # Launch the Gradio app
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--debug', action='store_true', help='Enable debug-level pipeline logging')
+    args = parser.parse_args()
+    set_debug(args.debug)
+
     os.makedirs(TMP_DIR, exist_ok=True)
 
     # Construct ui components

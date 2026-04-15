@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ...modules import sparse as sp
+from ...utils.pipeline_logger import get_logger
 from .sparse_unet_vae import (
     SparseResBlock3d,
     SparseConvNeXtBlock3d,
@@ -97,11 +98,11 @@ class FlexiDualGridVaeDecoder(SparseUnetVaeDecoder):
         else:
             out_list = list(decoded) if isinstance(decoded, tuple) else [decoded]
             h = out_list[0]
-            print(f"post-forward dtype={h.feats.dtype} has_nan={torch.isnan(h.feats).any()}")
-            print("DEBUG 1: VAE output h.feats has NaNs:", torch.isnan(h.feats).any().item())
+            get_logger().debug(f"post-forward dtype={h.feats.dtype} has_nan={torch.isnan(h.feats).any()}")
+            get_logger().debug(f"DEBUG 1: VAE output h.feats has NaNs: {torch.isnan(h.feats).any().item()}")
             vertices = h.replace((1 + 2 * self.voxel_margin) * F.sigmoid(h.feats[..., 0:3]) - self.voxel_margin)
             intersected = h.replace(h.feats[..., 3:6] > 0)
-            print(f"DEBUG INTERSECTED: total={intersected.feats.shape[0]}, "
+            get_logger().debug(f"DEBUG INTERSECTED: total={intersected.feats.shape[0]}, "
             f"true={intersected.feats.any(dim=-1).sum().item()}, "
             f"ratio={intersected.feats.any(dim=-1).float().mean():.3f}")
             quad_lerp = h.replace(F.softplus(h.feats[..., 6:7]))
@@ -111,6 +112,6 @@ class FlexiDualGridVaeDecoder(SparseUnetVaeDecoder):
                 grid_size=self.resolution,
                 train=False
             )) for v, i, q in zip(vertices, intersected, quad_lerp)]
-            print("DEBUG 2: o_voxel mesh[0] vertices has NaNs:", torch.isnan(mesh[0].vertices).any().item())
+            get_logger().debug(f"DEBUG 2: o_voxel mesh[0] vertices has NaNs: {torch.isnan(mesh[0].vertices).any().item()}")
             out_list[0] = mesh
             return out_list[0] if len(out_list) == 1 else tuple(out_list)

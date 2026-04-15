@@ -513,15 +513,9 @@ class PbrMeshRenderer:
                     gb_roughness,
                     gb_metallic,
                 ], dim=-1)
-                #DEBUGGING
-
-                                # Debug Check for AMD
-                print("--- RASTERIZATION DEBUG ---")
-                print("pos sum:", pos.sum().item(), "| max:", pos.max().item())
-                print("gb_normal sum:", gb_normal.sum().item(), "| max:", gb_normal.max().item())
-                print("gb_basecolor sum:", gb_basecolor.sum().item(), "| max:", gb_basecolor.max().item())
-                print("gb_orm sum:", gb_orm.sum().item(), "| max:", gb_orm.max().item())
-                print("mask sum:", mask.float().sum().item())
+                _log = get_logger()
+                _log.debug(f"--- RASTERIZATION DEBUG --- pos sum: {pos.sum().item()} | max: {pos.max().item()}")
+                _log.debug(f"gb_normal sum: {gb_normal.sum().item()} | gb_basecolor sum: {gb_basecolor.sum().item()} | gb_orm sum: {gb_orm.sum().item()} | mask sum: {mask.float().sum().item()}")
 
 
                 gb_shaded = torch.stack([
