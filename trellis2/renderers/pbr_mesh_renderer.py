@@ -5,6 +5,24 @@ import numpy as np
 import utils3d
 from ..representations.mesh import Mesh, MeshWithVoxel, MeshWithPbrMaterial, TextureFilterMode, AlphaMode, TextureWrapMode
 import torch.nn.functional as F
+from ..utils.pipeline_logger import get_logger, log_mesh, log_uv, log_tensor, elapsed, section
+from ..modules.sparse.linear import ROCM_SAFE_CHUNK
+
+
+def _safe_transform4x4(vertices_homo: torch.Tensor, matrix: torch.Tensor) -> torch.Tensor:
+    """
+    Chunked drop-in for torch.bmm(vertices_homo, matrix) to work around the
+    ROCm GEMM bug where N > ~800k produces corrupt results.
+    vertices_homo: [B, N, 4]   matrix: [B, 4, 4]
+    """
+    B, N, _ = vertices_homo.shape
+    if N <= ROCM_SAFE_CHUNK:
+        return torch.bmm(vertices_homo, matrix)
+    parts = []
+    for s in range(0, N, ROCM_SAFE_CHUNK):
+        e = min(s + ROCM_SAFE_CHUNK, N)
+        parts.append(torch.bmm(vertices_homo[:, s:e, :], matrix))
+    return torch.cat(parts, dim=1)
 
 
 def cube_to_dir(s, x, y):
@@ -273,33 +291,76 @@ class PbrMeshRenderer:
         full_proj = (perspective @ extrinsics).unsqueeze(0)
         extrinsics = extrinsics.unsqueeze(0)
         
+        L = get_logger()
+        section(f"PbrMeshRenderer.render  res={resolution}  ssaa={ssaa}")
+
         vertices = mesh.vertices.unsqueeze(0)
         vertices_orig = vertices.clone()
         vertices_homo = torch.cat([vertices, torch.ones_like(vertices[..., :1])], dim=-1)
         if transformation is not None:
-            vertices_homo = torch.bmm(vertices_homo, transformation.unsqueeze(0).transpose(-1, -2))
+            vertices_homo = _safe_transform4x4(vertices_homo, transformation.unsqueeze(0).transpose(-1, -2))
             vertices = vertices_homo[..., :3].contiguous()
-        vertices_camera = torch.bmm(vertices_homo, extrinsics.transpose(-1, -2))
-        vertices_clip = torch.bmm(vertices_homo, full_proj.transpose(-1, -2))
+        vertices_camera = _safe_transform4x4(vertices_homo, extrinsics.transpose(-1, -2))
+        vertices_clip = _safe_transform4x4(vertices_homo, full_proj.transpose(-1, -2))
         faces = mesh.faces
-        
-        v0 = vertices[0, mesh.faces[:, 0], :3]
-        v1 = vertices[0, mesh.faces[:, 1], :3]
-        v2 = vertices[0, mesh.faces[:, 2], :3]
-        e0 = v1 - v0
-        e1 = v2 - v0
-        face_normal = torch.cross(e0, e1, dim=1)
-        face_normal = F.normalize(face_normal, dim=1)
-        
+
+        # ── Pre-rasterize sanity checks ──────────────────────────────────────
+        log_mesh(mesh.vertices, mesh.faces, "renderer-input")
+        L.info(f"  {elapsed()} full_proj:\n{full_proj[0].cpu().numpy()}")
+
+        vc = vertices_clip[0]  # [N, 4]
+        has_nan = torch.isnan(vc).any().item()
+        has_inf = torch.isinf(vc).any().item()
+        w_min, w_max = vc[:, 3].min().item(), vc[:, 3].max().item()
+        w_zero = (vc[:, 3].abs() < 1e-6).sum().item()
+        L.info(f"  {elapsed()} vertices_clip: shape={list(vc.shape)}  "
+               f"NaN={has_nan}  inf={has_inf}  "
+               f"x=[{vc[:,0].min().item():.4g},{vc[:,0].max().item():.4g}]  "
+               f"y=[{vc[:,1].min().item():.4g},{vc[:,1].max().item():.4g}]  "
+               f"z=[{vc[:,2].min().item():.4g},{vc[:,2].max().item():.4g}]  "
+               f"w=[{w_min:.4g},{w_max:.4g}]  w_zeros={w_zero}")
+        if has_nan or has_inf:
+            L.error("  ⚠ vertices_clip has NaN/inf — rasterizer will produce garbage!")
+        if w_min < 0:
+            L.warning(f"  ⚠ vertices_clip has negative w values ({(vc[:,3]<0).sum().item()} vertices)"
+                      " — behind camera, may cause artifacts")
+        # NDC coords after perspective divide
+        ndc = vc[:, :3] / vc[:, 3:4].clamp(min=1e-6)
+        L.info(f"  {elapsed()} NDC (after w-divide): "
+               f"x=[{ndc[:,0].min().item():.4g},{ndc[:,0].max().item():.4g}]  "
+               f"y=[{ndc[:,1].min().item():.4g},{ndc[:,1].max().item():.4g}]  "
+               f"z=[{ndc[:,2].min().item():.4g},{ndc[:,2].max().item():.4g}]  "
+               f"out_of_frustum={(ndc.abs() > 1.0).any(dim=1).sum().item()}/{vc.shape[0]}")
+
+        # Normal computation is skipped — all GPU and CPU smooth-normal approaches
+        # produce artifacts on ROCm GFX1201 for large meshes.
+        # A constant normal is used instead: normal view will be flat, but PBR/clay
+        # renders will be artifact-free.
+        _faces_cpu = mesh.faces.long().cpu()          # [F, 3] — needed in the render loop
+
         out_dict = edict()
         shaded = torch.zeros((num_envmaps, resolution * ssaa, resolution * ssaa, 3), dtype=torch.float32, device=self.device)
         depth = torch.full((resolution * ssaa, resolution * ssaa, 1), 1e10, dtype=torch.float32, device=self.device)
         normal = torch.zeros((resolution * ssaa, resolution * ssaa, 3), dtype=torch.float32, device=self.device)
         max_w = torch.zeros((resolution * ssaa, resolution * ssaa, 1), dtype=torch.float32, device=self.device)
         alpha = torch.zeros((resolution * ssaa, resolution * ssaa, 1), dtype=torch.float32, device=self.device)
+
+        rast_test, _ = dr.rasterize(self.glctx, vertices_clip, faces, resolution=[resolution * ssaa, resolution * ssaa])
+        max_tri_id = rast_test[..., -1].max().item()
+        visible_px = (rast_test[..., -1] > 0).sum().item()
+        total_px = (resolution * ssaa) ** 2
+        L.info(f"  {elapsed()} rasterize test: max_tri_id={max_tri_id:.0f}  "
+               f"visible_px={visible_px}/{total_px} ({100.*visible_px/total_px:.1f}%)")
+        if max_tri_id > mesh.faces.shape[0]:
+            L.error(f"  ⚠ max_tri_id {max_tri_id} > num_faces {mesh.faces.shape[0]} — CORRUPT RASTERIZE OUTPUT")
+
         with dr.DepthPeeler(self.glctx, vertices_clip, faces, (resolution * ssaa, resolution * ssaa)) as peeler:
             for _ in range(self.rendering_options["peel_layers"]):
                 rast, rast_db = peeler.rasterize_next_layer()
+
+                if _ in [0, 1, 2]:
+                    visible_pixels = (rast[..., -1] > 0).sum().item()
+                    L.info(f"  {elapsed()} DepthPeel layer={_}  visible_px={visible_pixels}")
                 
                 # Pos
                 pos = dr.interpolate(vertices, rast, faces)[0][0]
@@ -307,13 +368,12 @@ class PbrMeshRenderer:
                 # Depth
                 gb_depth = dr.interpolate(vertices_camera[..., 2:3].contiguous(), rast, faces)[0][0]
                         
-                # Normal
-                gb_normal = dr.interpolate(face_normal.unsqueeze(0), rast, torch.arange(face_normal.shape[0], dtype=torch.int, device=self.device).unsqueeze(1).repeat(1, 3).contiguous())[0][0]
-                gb_normal = torch.where(
-                    torch.sum(gb_normal * (pos - rays_o), dim=-1, keepdim=True) > 0,
-                    -gb_normal,
-                    gb_normal
-                )
+                # Constant normal pointing toward the camera (-Z in camera space).
+                # Smooth normal computation is unreliable on ROCm GFX1201 large meshes.
+                H = rast.shape[1]; W = rast.shape[2]
+                gb_normal = torch.zeros(H, W, 3, dtype=torch.float32, device=self.device)
+                gb_normal[..., 2] = -1.0
+                gb_normal = gb_normal * (rast[0, ..., 3:4] > 0).float()
                 gb_cam_normal = (extrinsics[..., :3, :3].reshape(1, 1, 3, 3) @ gb_normal.unsqueeze(-1)).squeeze(-1)
                 if _ == 0:
                     out_dict.normal = -gb_cam_normal * 0.5 + 0.5
@@ -342,6 +402,18 @@ class PbrMeshRenderer:
                 elif isinstance(mesh, MeshWithPbrMaterial):
                     tri_id = rast[0, :, :, -1:]
                     mask = tri_id > 0
+                    if _ == 0:  # log once per render call
+                        L.info(f"  {elapsed()} MeshWithPbrMaterial: "
+                               f"uv_coords={list(mesh.uv_coords.shape)}  "
+                               f"material_ids={list(mesh.material_ids.shape)}  "
+                               f"num_materials={len(mesh.materials)}")
+                        log_uv(mesh.uv_coords.reshape(-1, 2), "mesh.uv_coords")
+                        fi_min = mesh.material_ids.min().item()
+                        fi_max = mesh.material_ids.max().item()
+                        L.info(f"  {elapsed()} material_ids range=[{fi_min},{fi_max}]  "
+                               f"num_materials={len(mesh.materials)}")
+                        if fi_max >= len(mesh.materials):
+                            L.error(f"  ⚠ material_ids max {fi_max} >= num_materials {len(mesh.materials)}!")
                     uv_coords = mesh.uv_coords.reshape(1, -1, 2)
                     texc, texd = dr.interpolate(
                         uv_coords,
@@ -350,11 +422,15 @@ class PbrMeshRenderer:
                         rast_db=rast_db,
                         diff_attrs='all'
                     )
+                    if _ == 0:
+                        log_tensor(texc, "texc-pre-clamp")
                     # Fix problematic texture coordinates
                     texc = torch.nan_to_num(texc, nan=0.0, posinf=1e3, neginf=-1e3)
                     texc = torch.clamp(texc, min=-1e3, max=1e3)
                     texd = torch.nan_to_num(texd, nan=0.0, posinf=1e3, neginf=-1e3)
                     texd = torch.clamp(texd, min=-1e3, max=1e3)
+                    if _ == 0:
+                        log_tensor(texc, "texc-post-clamp")
                     mid = mesh.material_ids[(tri_id - 1).long()]
                     gb_basecolor = torch.zeros((resolution * ssaa, resolution * ssaa, 3), dtype=torch.float32, device=self.device)
                     gb_metallic = torch.zeros((resolution * ssaa, resolution * ssaa, 1), dtype=torch.float32, device=self.device)
@@ -437,6 +513,17 @@ class PbrMeshRenderer:
                     gb_roughness,
                     gb_metallic,
                 ], dim=-1)
+                #DEBUGGING
+
+                                # Debug Check for AMD
+                print("--- RASTERIZATION DEBUG ---")
+                print("pos sum:", pos.sum().item(), "| max:", pos.max().item())
+                print("gb_normal sum:", gb_normal.sum().item(), "| max:", gb_normal.max().item())
+                print("gb_basecolor sum:", gb_basecolor.sum().item(), "| max:", gb_basecolor.max().item())
+                print("gb_orm sum:", gb_orm.sum().item(), "| max:", gb_orm.max().item())
+                print("mask sum:", mask.float().sum().item())
+
+
                 gb_shaded = torch.stack([
                     e.shade(
                         pos.unsqueeze(0),

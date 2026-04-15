@@ -211,6 +211,96 @@ def sparse_scaled_dot_product_attention(*args, **kwargs):
             max_q_seqlen = max(q_seqlen)
             max_kv_seqlen = max(kv_seqlen)
         out = flash_attn_3.flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max_q_seqlen, max_kv_seqlen)
+    elif config.ATTN == 'sdpa':
+        import torch.nn.functional as F
+        
+        # --- Step 1: Unpack q, k, v based on input format ---
+        if num_all_args == 1:
+            # Packed qkv format: [T, 3, H, C]
+            q, k, v = qkv.unbind(dim=1)
+        elif num_all_args == 2:
+            # q and packed kv format: [T_KV, 2, H, C]
+            k, v = kv.unbind(dim=1)
+            # q already set in arg parsing above
+        # else num_all_args == 3: q, k, v already set in arg parsing
+        
+        # --- Step 2: Extract shapes ---
+        num_heads = q.shape[1]
+        head_dim = q.shape[2]
+        B = len(q_seqlen)
+        max_q_len = max(q_seqlen)
+        max_kv_len = max(kv_seqlen)
+        
+        # --- Step 3: Pad to dense [B, N, H, C] ---
+        q_padded = torch.zeros(B, max_q_len, num_heads, head_dim,
+                               device=device, dtype=q.dtype)
+        k_padded = torch.zeros(B, max_kv_len, num_heads, head_dim,
+                               device=device, dtype=k.dtype)
+        v_padded = torch.zeros(B, max_kv_len, num_heads, head_dim,
+                               device=device, dtype=v.dtype)
+        
+        q_off, kv_off = 0, 0
+        for b in range(B):
+            ql, kvl = q_seqlen[b], kv_seqlen[b]
+            q_padded[b, :ql] = q[q_off:q_off + ql]
+            k_padded[b, :kvl] = k[kv_off:kv_off + kvl]
+            v_padded[b, :kvl] = v[kv_off:kv_off + kvl]
+            q_off += ql
+            kv_off += kvl
+        
+        # --- Step 4: Transpose for SDPA [B, H, N, C] ---
+        q_t = q_padded.transpose(1, 2)
+        k_t = k_padded.transpose(1, 2)
+        v_t = v_padded.transpose(1, 2)
+        
+        # --- Step 5: Create mask [B, 1, N_q, N_kv] ---
+        attn_mask = torch.zeros(B, max_q_len, max_kv_len,
+                                dtype=torch.bool, device=device)
+        for b in range(B):
+            attn_mask[b, :q_seqlen[b], :kv_seqlen[b]] = True
+        attn_mask = attn_mask.unsqueeze(1)
+        
+        # --- Step 6: Run SDPA ---
+        # Use torch.nn.attention.sdpa_kernel for newer PyTorch
+        try:
+            from torch.nn.attention import sdpa_kernel, SDPBackend
+            with sdpa_kernel([SDPBackend.MATH]):
+                out_t = F.scaled_dot_product_attention(
+                    q_t, k_t, v_t,
+                    attn_mask=attn_mask,
+                    dropout_p=0.0,
+                    is_causal=False,
+                )
+        except ImportError:
+            # Fallback for older PyTorch
+            with torch.backends.cuda.sdp_kernel(
+                enable_flash=False,
+                enable_math=True,
+                enable_mem_efficient=True,
+            ):
+                out_t = F.scaled_dot_product_attention(
+                    q_t, k_t, v_t,
+                    attn_mask=attn_mask,
+                    dropout_p=0.0,
+                    is_causal=False,
+                )
+        
+        # --- Step 7: Transpose and unpad ---
+        out_padded = out_t.transpose(1, 2)  # [B, N, H, C]
+        
+        out = torch.zeros(q.shape[0], num_heads, head_dim,
+                          device=device, dtype=q.dtype)
+        q_off = 0
+        for b in range(B):
+            ql = q_seqlen[b]
+            out[q_off:q_off + ql] = out_padded[b, :ql]
+            q_off += ql
+        
+        # NO EARLY RETURN HERE - let it fall through to common return
+        # The code below (outside all elif blocks) handles:
+        #   if s is not None: return s.replace(out)
+        #   else: return out.reshape(...)
+
     else:
         raise ValueError(f"Unknown attention module: {config.ATTN}")
     

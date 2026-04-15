@@ -207,4 +207,15 @@ marimo/_lsp/
 __marimo__/
 
 *.glb
+
+# Editor backups
+*~
+
+# Compiled shaders
+*.spv
+
+# Dev/debug scripts
+manual_matmul.py
+test_matmul_comprehensive.py
+test_trellis2_deps.py
 /tmp

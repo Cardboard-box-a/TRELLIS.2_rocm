@@ -3,8 +3,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint
-from ...modules.utils import convert_module_to_f16, convert_module_to_f32, zero_module
+from ...modules.utils import convert_module_to_f16, convert_module_to_bf16, convert_module_to_f32, zero_module
 from ...modules import sparse as sp
+from ...modules.sparse.linear import rocm_safe_linear, ROCM_SAFE_CHUNK
 from ...modules.norm import LayerNorm32
 
 
@@ -243,7 +244,8 @@ class SparseResBlockC2S3d(nn.Module):
         h = x.replace(self.norm1(x.feats))
         h = h.replace(F.silu(h.feats))
         h = self.conv1(h)
-        subdiv_binarized = subdiv.replace(subdiv.feats > 0) if subdiv is not None else None
+        # ROCm: cast to fp32 before threshold - bf16 trained weights produce shifted logits\n
+        subdiv_binarized = subdiv.replace(subdiv.feats.float() > 0) if subdiv is not None else None
         h = self.updown(h, subdiv_binarized)
         x = self.updown(x, subdiv_binarized)
         h = h.replace(self.norm2(h.feats))
@@ -284,7 +286,18 @@ class SparseConvNeXtBlock3d(nn.Module):
     def _forward(self, x: sp.SparseTensor) -> sp.SparseTensor:
         h = self.conv(x)
         h = h.replace(self.norm(h.feats))
-        h = h.replace(self.mlp(h.feats))
+        # ROCm GFX1201 bug workaround: chunk MLP (two nn.Linear layers inside) for large N
+        # The MLP is row-independent so chunking is exact, not an approximation
+        feats = h.feats
+        N = feats.shape[0]
+        if N <= ROCM_SAFE_CHUNK:
+            h = h.replace(self.mlp(feats))
+        else:
+            out = torch.empty_like(feats)
+            for s in range(0, N, ROCM_SAFE_CHUNK):
+                e = min(s + ROCM_SAFE_CHUNK, N)
+                out[s:e] = self.mlp(feats[s:e])
+            h = h.replace(out)
         return h + x
     
     def forward(self, x: sp.SparseTensor) -> sp.SparseTensor:
@@ -313,7 +326,6 @@ class SparseUnetVaeEncoder(nn.Module):
         self.in_channels = in_channels
         self.model_channels = model_channels
         self.num_blocks = num_blocks
-        self.dtype = torch.float16 if use_fp16 else torch.float32
         self.dtype = torch.float16 if use_fp16 else torch.float32
 
         self.input_layer = sp.SparseLinear(in_channels, model_channels[0])
@@ -351,7 +363,7 @@ class SparseUnetVaeEncoder(nn.Module):
 
     def convert_to_fp16(self) -> None:
         """
-        Convert the torso of the model to float16.
+        Convert the torso of the model to float16 (actually bfloat16 for ROCm stability).
         """
         self.blocks.apply(convert_module_to_f16)
 
@@ -456,7 +468,7 @@ class SparseUnetVaeDecoder(nn.Module):
 
     def convert_to_fp16(self) -> None:
         """
-        Convert the torso of the model to float16.
+        Convert the torso of the model to float16 (actually bfloat16 for ROCm stability).
         """
         self.blocks.apply(convert_module_to_f16)
 
@@ -480,7 +492,9 @@ class SparseUnetVaeDecoder(nn.Module):
         assert return_subs == False or self.pred_subdiv == True, "Only decoders with pred_subdiv=True can be used with return_subs"
         
         h = self.from_latent(x)
+        print(f"DECODER from_latent: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
         h = h.type(self.dtype)
+        print(f"DECODER after dtype cast: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
         subs_gt = []
         subs = []
         for i, res in enumerate(self.blocks):
@@ -495,9 +509,23 @@ class SparseUnetVaeDecoder(nn.Module):
                         h = block(h, subdiv=guide_subs[i] if guide_subs is not None else None)
                 else:
                     h = block(h)
+                
+                if not torch.isfinite(h.feats).all():
+                    print(f"FATAL: NaN/Inf at decoder block i={i} j={j} type={type(block).__name__} max={h.feats.float().abs().max().item():.4f}")
+                    import sys; sys.exit(1)
+
         h = h.type(x.dtype)
+        print(f"DECODER post-blocks cast: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
         h = h.replace(F.layer_norm(h.feats, h.feats.shape[-1:]))
+        print(f"DECODER post-layernorm: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f}")
+        print(f"DECODER output_layer input: shape={h.feats.shape} stride={h.feats.stride()} contiguous={h.feats.is_contiguous()}")
+        print(f"DECODER output_layer weight: shape={self.output_layer.weight.shape} dtype={self.output_layer.weight.dtype}")
+        print(f"DECODER pre-output_layer: feats shape={h.feats.shape} contiguous={h.feats.is_contiguous()} weight shape={self.output_layer.weight.shape} weight dtype={self.output_layer.weight.dtype}")
+        # ROCm workaround: ensure contiguous before F.linear
+        h = h.replace(h.feats.contiguous())
         h = self.output_layer(h)
+        print(f"DECODER post-output_layer: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f} dtype={h.feats.dtype}")
+        print(f"DEBUG OUTPUT_LAYER: dtype={h.feats.dtype} has_nan={torch.isnan(h.feats).any().item()} max_abs={h.feats.abs().max().item() if h.feats.numel() > 0 else 0}")
         if self.training and self.pred_subdiv:
             return h, subs_gt, subs
         else:
@@ -506,11 +534,14 @@ class SparseUnetVaeDecoder(nn.Module):
             else:
                 return h
     
+    # REPLACE WITH:
     def upsample(self, x: sp.SparseTensor, upsample_times: int) -> torch.Tensor:
         assert self.pred_subdiv == True, "Only decoders with pred_subdiv=True can be used with upsampling"
         
         h = self.from_latent(x)
+        print(f"UPSAMPLE from_latent: dtype={h.feats.dtype} nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f}")
         h = h.type(self.dtype)
+        print(f"UPSAMPLE after type cast to {self.dtype}: nan={torch.isnan(h.feats).any().item()} inf={torch.isinf(h.feats).any().item()} max={h.feats.float().abs().max().item():.4f}")
         for i, res in enumerate(self.blocks):
             if i == upsample_times:
                 return h.coords
@@ -519,4 +550,19 @@ class SparseUnetVaeDecoder(nn.Module):
                     h, sub = block(h)
                 else:
                     h = block(h)
+                if torch.isnan(h.feats).any() or torch.isinf(h.feats).any():
+                    print(f"UPSAMPLE NaN/Inf at block i={i} j={j} type={type(block).__name__} max={h.feats.float().abs().max().item():.4f}")
+                    break
+            else:
+                continue
+            break
        
+    def dump_debug(self, tag: str, tensor) -> None:
+        import os
+        os.makedirs('/tmp/trellis_debug', exist_ok=True)
+        path = f'/tmp/trellis_debug/{tag}.pt'
+        torch.save({'feats': tensor.feats.float().cpu(), 'coords': tensor.coords.cpu()}, path)
+        print(f"DUMPED {tag}: feats dtype={tensor.feats.dtype} shape={tensor.feats.shape} "
+              f"has_nan={torch.isnan(tensor.feats).any().item()} "
+              f"has_inf={torch.isinf(tensor.feats).any().item()} "
+              f"max={tensor.feats.float().abs().max().item():.4f}")

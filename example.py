@@ -7,6 +7,10 @@ import cv2
 import imageio
 from PIL import Image
 import torch
+# Cap PyTorch to 90% of VRAM. On ROCm, exceeding 100% faults the GPU driver
+# and hangs the display rather than raising a Python OOM exception.
+# 90% leaves headroom for the display driver and system allocations.
+torch.cuda.set_per_process_memory_fraction(0.90)
 from trellis2.pipelines import Trellis2ImageTo3DPipeline
 from trellis2.utils import render_utils
 from trellis2.renderers import EnvMap

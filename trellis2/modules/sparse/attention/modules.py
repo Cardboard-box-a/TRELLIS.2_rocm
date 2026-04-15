@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .. import VarLenTensor, SparseTensor
+from ..linear import rocm_safe_linear
 from .full_attn import sparse_scaled_dot_product_attention
 from .windowed_attn import sparse_windowed_scaled_dot_product_self_attention
 from .rope import SparseRotaryPositionEmbedder
@@ -77,7 +78,7 @@ class SparseMultiHeadAttention(nn.Module):
     @staticmethod
     def _linear(module: nn.Linear, x: Union[VarLenTensor, torch.Tensor]) -> Union[VarLenTensor, torch.Tensor]:
         if isinstance(x, VarLenTensor):
-            return x.replace(module(x.feats))
+            return x.replace(rocm_safe_linear(x.feats, module.weight, module.bias))
         else:
             return module(x)
 

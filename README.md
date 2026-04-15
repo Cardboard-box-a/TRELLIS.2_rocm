@@ -99,6 +99,39 @@ Data processing is streamlined for instant conversions that are fully **renderin
         --nvdiffrec             Install nvdiffrec
     ```
 
+## AMD ROCm Support
+
+This branch has been tested on an **AMD RX 9070 XT 16GB** (gfx1201) under ROCm. The setup script auto-detects CUDA vs ROCm and installs the appropriate dependencies.
+
+### Installation (ROCm)
+
+```sh
+. ./setup.sh --new-env --basic --flash-attn --cumesh --o-voxel --flexgemm --nvdiffrast
+```
+
+> **Note:** `--nvdiffrast` and `--nvdiffrec` are CUDA-only (PBR texture rendering). On ROCm these are skipped automatically. Core image-to-3D generation works without them.
+
+### Running
+
+Flash Attention on ROCm requires the Triton backend. Export this before running:
+
+```sh
+export FLASH_ATTENTION_TRITON_AMD_ENABLE="TRUE"
+python app.py
+```
+
+If you prefer not to use Flash Attention, SDPA (Scaled Dot-Product Attention) is also supported. Set the attention backend before running:
+
+```sh
+export ATTN_BACKEND="sdpa"
+python app.py
+```
+
+### AMD GPU Architecture
+
+The `--flash-attn` step in `setup.sh` compiles for `gfx1201` (RX 9070 / RX 9070 XT) by default. If you have a different AMD GPU, edit the `GPU_ARCHS` line in `setup.sh` before running. Check your GPU's gfx architecture with `rocminfo | grep gfx`.
+
+
 ## 📦 Pretrained Weights
 
 The pretrained model **TRELLIS.2-4B** is available on Hugging Face. Please refer to the model card there for more details.
@@ -303,10 +336,12 @@ TRELLIS.2 is built upon several specialized high-performance packages developed 
 
 *   **[O-Voxel](o-voxel):** 
     Core library handling the logic for converting between textured meshes and the O-Voxel representation, ensuring instant bidirectional transformation.
-*   **[FlexGEMM](https://github.com/JeffreyXiang/FlexGEMM):** 
-    Efficient sparse convolution implementation based on Triton, enabling rapid processing of sparse voxel structures.
-*   **[CuMesh](https://github.com/JeffreyXiang/CuMesh):** 
-    CUDA-accelerated mesh utilities used for high-speed post-processing, remeshing, decimation, and UV-unwrapping.
+*   **[FlexGEMM](https://github.com/Cardboard-box-a/FlexGEMM-rocm):** 
+    Efficient sparse convolution implementation based on Triton, enabling rapid processing of sparse voxel structures. This fork adds ROCm/HIP support (ieee precision fix for AMD Triton kernels).
+*   **[CuMesh](https://github.com/Cardboard-box-a/CuMesh):** 
+    CUDA-accelerated mesh utilities used for high-speed post-processing, remeshing, decimation, and UV-unwrapping. This fork includes ROCm/HIP support.
+*   **[nvdiffrast-hip](https://github.com/Cardboard-box-a/nvdiffrast-hip):**
+    HIP/ROCm port of nvdiffrast for AMD GPUs.
 
 
 ## ⚖️ License

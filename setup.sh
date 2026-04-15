@@ -106,15 +106,16 @@ if [ "$NVDIFFRAST" = true ] ; then
         git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast
         pip install /tmp/extensions/nvdiffrast --no-build-isolation
     elif [ "$PLATFORM" = "hip" ] ; then
-        git submodule update --init extensions/nvdiffrast-hip
-        pip install ./extensions/nvdiffrast-hip --no-build-isolation
+        mkdir -p /tmp/extensions
+        git clone https://github.com/Cardboard-box-a/nvdiffrast-hip.git /tmp/extensions/nvdiffrast-hip
+        pip install /tmp/extensions/nvdiffrast-hip --no-build-isolation
     fi
 fi
 
 if [ "$NVDIFFREC" = true ] ; then
     if [ "$PLATFORM" = "cuda" ] ; then
         mkdir -p /tmp/extensions
-        git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec
+        git clone -b renderutils https://github.com/Cardboard-box-a/nvdiffrec.git /tmp/extensions/nvdiffrec
         pip install /tmp/extensions/nvdiffrec --no-build-isolation
     else
         echo "[NVDIFFREC] Unsupported platform: $PLATFORM"
@@ -122,16 +123,19 @@ if [ "$NVDIFFREC" = true ] ; then
 fi
 
 if [ "$CUMESH" = true ] ; then
-    git submodule update --init --recursive extensions/CuMesh
-    pip install ./extensions/CuMesh --no-build-isolation
+    mkdir -p /tmp/extensions
+    git clone https://github.com/Cardboard-box-a/CuMesh.git /tmp/extensions/CuMesh --recursive
+    pip install /tmp/extensions/CuMesh --no-build-isolation
 fi
 
 if [ "$FLEXGEMM" = true ] ; then
-    git submodule update --init extensions/FlexGEMM
-    pip install ./extensions/FlexGEMM --no-build-isolation
+    mkdir -p /tmp/extensions
+    git clone https://github.com/Cardboard-box-a/FlexGEMM-rocm.git /tmp/extensions/FlexGEMM
+    pip install /tmp/extensions/FlexGEMM --no-build-isolation
 fi
 
 if [ "$OVOXEL" = true ] ; then
-    git submodule update --init --recursive extensions/o-voxel
-    pip install ./extensions/o-voxel --no-build-isolation
+    mkdir -p /tmp/extensions
+    git clone https://github.com/Cardboard-box-a/o-voxel.git /tmp/extensions/o-voxel --recursive
+    pip install /tmp/extensions/o-voxel --no-build-isolation
 fi

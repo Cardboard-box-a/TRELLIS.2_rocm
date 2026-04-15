@@ -39,27 +39,57 @@ def yaw_pitch_r_fov_to_extrinsics_intrinsics(yaws, pitchs, rs, fovs):
     return extrinsics, intrinsics
 
 
+def _safe_ssaa(sample, requested_ssaa, resolution, vram_limit_gb=14.0):
+    """
+    Cap ssaa so the estimated peak VRAM stays under vram_limit_gb.
+    Rough model: raster buffers at (resolution*ssaa)^2, 3 envmaps, 8 peel layers.
+    Each peel layer: ~160 MB transient (xyz + img + rast).
+    Constant mesh overhead: ~400 MB.
+    """
+    num_faces = 0
+    if isinstance(sample, (MeshWithPbrMaterial, MeshWithVoxel)):
+        num_faces = sample.faces.shape[0] if hasattr(sample, 'faces') else 0
+    for ssaa in [requested_ssaa, requested_ssaa - 1, 1]:
+        if ssaa < 1:
+            ssaa = 1
+        pixels = (resolution * ssaa) ** 2
+        # ~160 MB per peel layer (3 envmaps * shaded + rast + xyz + img)
+        peel_layers = 8
+        est_mb = (pixels * 4 * 4 * (3 + peel_layers) / 1e6) + 400
+        if est_mb < vram_limit_gb * 1024:
+            return ssaa
+    return 1
+
+
 def get_renderer(sample, **kwargs):
     if isinstance(sample, (MeshWithPbrMaterial, MeshWithVoxel)):
         renderer = PbrMeshRenderer()
-        renderer.rendering_options.resolution = kwargs.get('resolution', 512)
+        resolution = kwargs.get('resolution', 512)
+        requested_ssaa = kwargs.get('ssaa', 1)
+        ssaa = _safe_ssaa(sample, requested_ssaa, resolution)
+        if ssaa != requested_ssaa:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"[render_utils] ssaa capped {requested_ssaa}→{ssaa} to stay under VRAM limit"
+            )
+        renderer.rendering_options.resolution = resolution
         renderer.rendering_options.near = kwargs.get('near', 1)
         renderer.rendering_options.far = kwargs.get('far', 100)
-        renderer.rendering_options.ssaa = kwargs.get('ssaa', 2)
+        renderer.rendering_options.ssaa = ssaa
         renderer.rendering_options.peel_layers = kwargs.get('peel_layers', 8)
     elif isinstance(sample, Mesh):
         renderer = MeshRenderer()
         renderer.rendering_options.resolution = kwargs.get('resolution', 512)
         renderer.rendering_options.near = kwargs.get('near', 1)
         renderer.rendering_options.far = kwargs.get('far', 100)
-        renderer.rendering_options.ssaa = kwargs.get('ssaa', 2)
+        renderer.rendering_options.ssaa = kwargs.get('ssaa', 1)
         renderer.rendering_options.chunk_size = kwargs.get('chunk_size', None)
     elif isinstance(sample, Voxel):
         renderer = VoxelRenderer()
         renderer.rendering_options.resolution = kwargs.get('resolution', 512)
         renderer.rendering_options.near = kwargs.get('near', 0.1)
         renderer.rendering_options.far = kwargs.get('far', 10.0)
-        renderer.rendering_options.ssaa = kwargs.get('ssaa', 2)
+        renderer.rendering_options.ssaa = kwargs.get('ssaa', 1)
     else:
         raise ValueError(f'Unsupported sample type: {type(sample)}')
     return renderer
@@ -67,6 +97,10 @@ def get_renderer(sample, **kwargs):
 
 def render_frames(sample, extrinsics, intrinsics, options={}, verbose=True, **kwargs):
     renderer = get_renderer(sample, **options)
+    # Free stale GPU allocations from the generation phase before rendering starts.
+    # On ROCm, driver-level OOM causes a display freeze rather than a Python exception,
+    # so we clear proactively rather than waiting for the allocator to evict.
+    torch.cuda.empty_cache()
     rets = {}
     for j, (extr, intr) in tqdm(enumerate(zip(extrinsics, intrinsics)), total=len(extrinsics), desc='Rendering', disable=not verbose):
         res = renderer.render(sample, extr, intr, **kwargs)

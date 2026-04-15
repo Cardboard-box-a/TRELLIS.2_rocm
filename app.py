@@ -12,6 +12,10 @@ import shutil
 import cv2
 from typing import *
 import torch
+# Cap PyTorch to 90% of VRAM. On ROCm, exceeding 100% faults the GPU driver
+# and hangs the display rather than raising a Python OOM exception.
+# 90% leaves headroom for the display driver and system allocations.
+torch.cuda.set_per_process_memory_fraction(0.90)
 import numpy as np
 from PIL import Image
 import base64
@@ -20,6 +24,9 @@ from trellis2.modules.sparse import SparseTensor
 from trellis2.pipelines import Trellis2ImageTo3DPipeline
 from trellis2.renderers import EnvMap
 from trellis2.utils import render_utils
+from trellis2.utils.pipeline_logger import (
+    reset_log, get_logger, section, log_mesh, log_tensor, log_uv, elapsed
+)
 import o_voxel
 
 
@@ -371,7 +378,12 @@ def image_to_3d(
     req: gr.Request,
     progress=gr.Progress(track_tqdm=True),
 ) -> str:
+    reset_log(f"resolution={resolution} seed={seed}")
+    L = get_logger()
+    L.info(f"image size={image.size} mode={image.mode}")
+
     # --- Sampling ---
+    section("pipeline.run()")
     outputs, latents = pipeline.run(
         image,
         seed=seed,
@@ -401,14 +413,40 @@ def image_to_3d(
         }[resolution],
         return_latent=True,
     )
+    section("Post-run mesh inspection")
     mesh = outputs[0]
-    mesh.simplify(16777216) # nvdiffrast limit
-    print("Skipping nvdiffrast preview render for ROCm compatibility...")
-    dummy_img = np.array(image.resize((512, 512)).convert("RGB"))
-    images = {mode['render_key']: [dummy_img] * STEPS for mode in MODES}    
-    #images = render_utils.render_snapshot(mesh, resolution=1024, r=2, fov=36, nviews=STEPS, envmap=envmap)
+    L.info(f"  mesh type: {type(mesh).__name__}")
+    log_mesh(mesh.vertices, mesh.faces, "pre-simplify")
+    if hasattr(mesh, 'coords'):
+        log_tensor(mesh.coords, "mesh.coords")
+    if hasattr(mesh, 'attrs'):
+        log_tensor(mesh.attrs, "mesh.attrs")
+
+    section("mesh.simplify(16777216)")
+    #mesh.simplify(16777216)  # nvdiffrast limit
+    log_mesh(mesh.vertices, mesh.faces, "post-simplify")
+
+    section("render_snapshot")
+    L.info(f"  resolution=1024  nviews={STEPS}")
+    images = render_utils.render_snapshot(mesh, resolution=1024, r=2, fov=36, nviews=STEPS, envmap=envmap)
+    section("render_snapshot complete")
+    for key, frames in images.items():
+        arr = frames[0]
+        L.info(f"  render[{key}][0]: shape={arr.shape}  "
+               f"min={arr.min():.3f}  max={arr.max():.3f}  "
+               f"NaN={bool(np.isnan(arr).any())}")
+    
+    #Comment these 3 lines if you want to test preview again.
+    #print("Skipping nvdiffrast preview render for ROCm compatibility...")
+    #dummy_img = np.array(image.resize((512, 512)).convert("RGB"))
+    #images = {mode['render_key']: [dummy_img] * STEPS for mode in MODES}
+    
+    section("extract_glb (GLB export path)")
+    L.info(f"  GLB re-decode will use resolution={res if 'res' in dir() else 'N/A'}")
+
     state = pack_state(latents)
     torch.cuda.empty_cache()
+    L.info(f"  {elapsed()} image_to_3d complete")
     
     # --- HTML Construction ---
     # The Stack of 48 Images
@@ -449,10 +487,10 @@ def image_to_3d(
     full_html = f"""
     <div class="previewer-container">
         <div class="tips-wrapper">
-            <div class="tips-icon">💡Tips</div>
+            <div class="tips-icon">ūüí°Tips</div>
             <div class="tips-text">
-                <p>● <b>Render Mode</b> - Click on the circular buttons to switch between different render modes.</p>
-                <p>● <b>View Angle</b> - Drag the slider to change the view angle.</p>
+                <p>‚óŹ <b>Render Mode</b> - Click on the circular buttons to switch between different render modes.</p>
+                <p>‚óŹ <b>View Angle</b> - Drag the slider to change the view angle.</p>
             </div>
         </div>
         
@@ -494,9 +532,22 @@ def extract_glb(
     Returns:
         str: The path to the extracted GLB file.
     """
+    L = get_logger()
+    section(f"extract_glb  decimation={decimation_target}  tex={texture_size}")
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     shape_slat, tex_slat, res = unpack_state(state)
+    L.info(f"  res={res}")
+
+    section("decode_latent (GLB path)")
     mesh = pipeline.decode_latent(shape_slat, tex_slat, res)[0]
+    log_mesh(mesh.vertices, mesh.faces, "glb-decoded")
+    if hasattr(mesh, 'coords'):
+        log_tensor(mesh.coords, "glb.coords")
+    if hasattr(mesh, 'attrs'):
+        log_tensor(mesh.attrs, "glb.attrs")
+
+    section("o_voxel.postprocess.to_glb")
+    L.info(f"  grid_size={res}  decimation={decimation_target}  texture_size={texture_size}")
     glb = o_voxel.postprocess.to_glb(
         vertices=mesh.vertices,
         faces=mesh.faces,

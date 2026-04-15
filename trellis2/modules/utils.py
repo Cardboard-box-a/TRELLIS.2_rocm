@@ -25,6 +25,15 @@ def convert_module_to_f16(l):
             p.data = p.data.half()
 
 
+def convert_module_to_bf16(l):
+    """
+    Convert primitive modules to bfloat16.
+    """
+    if isinstance(l, MIX_PRECISION_MODULES):
+        for p in l.parameters():
+            p.data = p.data.bfloat16()
+
+
 def convert_module_to_f32(l):
     """
     Convert primitive modules to float32, undoing convert_module_to_f16().
