@@ -70,6 +70,18 @@ Data processing is streamlined for instant conversions that are fully **renderin
     cd TRELLIS.2_rocm
     ```
 
+    For a pinned ROCm Python/PyPI reference environment, create the conda
+    environment from `conda-env.yaml`, then run `setup.sh` for the source-built
+    GPU extensions. The extension repos remain installed by `setup.sh` so new
+    installs can pick up fixes from those projects.
+
+    ```sh
+    conda env create -f conda-env.yaml
+    conda activate trellis2
+    export FLASH_ATTENTION_TRITON_AMD_ENABLE="TRUE"
+    . ./setup.sh --flash-attn --cumesh --o-voxel --flexgemm --nvdiffrast --nvdiffrec
+    ```
+
 2. Install PyTorch into your environment **before** running `setup.sh`. Use the index URL matching your platform:
 
     **CUDA:**
